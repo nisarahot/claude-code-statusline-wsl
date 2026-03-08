@@ -99,33 +99,45 @@ SEVEN_DAY_UTIL=""
 SEVEN_DAY_RESET=""
 
 fetch_usage() {
-  local token
-  token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
+  local token=""
+  local credentials_file="$HOME/.claude/.credentials.json"
+
+  # Linux/WSL: ~/.claude/.credentials.json から直接読み込み
+  if [ -f "$credentials_file" ]; then
+    # JSON構造が { "claudeAiOauth": { "accessToken": "..." } } の場合
+    token=$(jq -r '.claudeAiOauth.accessToken // .accessToken // empty' "$credentials_file" 2>/dev/null)
+  fi
+
+  # トークンが空の場合、macOS互換としてKeychainを試す（WSLでは失敗するので無視可）
+  if [ -z "$token" ] && command -v security >/dev/null 2>&1; then
+    local keychain_token
+    keychain_token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null || true)
+    if [ -n "$keychain_token" ]; then
+      if echo "$keychain_token" | jq -e . >/dev/null 2>&1; then
+        token=$(echo "$keychain_token" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+      else
+        token="$keychain_token"
+      fi
+    fi
+  fi
+
   [ -z "$token" ] && return 1
 
-  local access_token
-  if echo "$token" | jq -e . >/dev/null 2>&1; then
-    access_token=$(echo "$token" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
-  else
-    access_token="$token"
-  fi
-  [ -z "$access_token" ] && return 1
-
   # Tiny Haiku call (max_tokens=1) to get rate limit response headers
-  # -si includes headers in output; -D- writes headers to stdout
   local full_response
   full_response=$(curl -sD- --max-time 8 -o /dev/null \
-    -H "Authorization: Bearer ${access_token}" \
+    -H "Authorization: Bearer ${token}" \
     -H "Content-Type: application/json" \
     -H "User-Agent: claude-code/${cc_version:-0.0.0}" \
     -H "anthropic-beta: oauth-2025-04-20" \
     -H "anthropic-version: 2023-06-01" \
     -d '{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"h"}]}' \
     "https://api.anthropic.com/v1/messages" 2>/dev/null || true)
+
   local headers="$full_response"
   [ -z "$headers" ] && return 1
 
-  # Parse rate limit headers
+  # Parse rate limit headers（以降は変更不要）
   local h5_util h5_reset h7_util h7_reset
   h5_util=$(echo "$headers" | grep -i 'anthropic-ratelimit-unified-5h-utilization' | tr -d '\r' | awk '{print $2}')
   h5_reset=$(echo "$headers" | grep -i 'anthropic-ratelimit-unified-5h-reset' | tr -d '\r' | awk '{print $2}')
@@ -134,7 +146,7 @@ fetch_usage() {
 
   [ -z "$h5_util" ] && return 1
 
-  # Save to cache as JSON
+  # Save to cache as JSON（以降変更不要）
   jq -n \
     --arg h5u "$h5_util" --arg h5r "$h5_reset" \
     --arg h7u "$h7_util" --arg h7r "$h7_reset" \
